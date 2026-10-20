@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Finished Stock Count · Count Audit</title>
+  <meta name="description" content="Search and reconcile counted stock against external expected units." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23125336'/%3E%3Crect x='8' y='18' width='4' height='7' rx='1' fill='%23d8f0a8'/%3E%3Crect x='14' y='12' width='4' height='13' rx='1' fill='%23d8f0a8'/%3E%3Crect x='20' y='7' width='4' height='18' rx='1' fill='%23d8f0a8'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="assets/styles.css" />
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem("count-theme");
+        if (saved === "dark") document.documentElement.dataset.theme = "dark";
+      } catch (error) {}
+    })();
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./" aria-label="Count Audit home">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="30" height="30" role="img">
+          <rect width="32" height="32" rx="8" fill="currentColor" />
+          <rect x="8" y="18" width="4" height="7" rx="1" fill="var(--brand-ink)" />
+          <rect x="14" y="12" width="4" height="13" rx="1" fill="var(--brand-ink)" />
+          <rect x="20" y="7" width="4" height="18" rx="1" fill="var(--brand-ink)" />
+        </svg>
+      </span>
+      <span class="brand-copy">
+        <strong>Count Audit</strong>
+        <small>Finished goods</small>
+      </span>
+    </a>
+    <div class="topbar-actions">
+      <span class="source-pill">
+        <span class="source-dot" id="sourceDot" aria-hidden="true"></span>
+        <span id="sourceLabel">Loading count file</span>
+      </span>
+      <button class="icon-button" id="themeToggle" type="button" aria-label="Switch to dark mode" title="Toggle color theme">
+        <svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8" />
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.65 17.65l1.42 1.42M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.65 6.35l1.42-1.42" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+        </svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="shell">
+    <section class="page-head">
+      <div class="page-heading">
+        <p class="eyebrow"><span class="eyebrow-line" aria-hidden="true"></span>Inventory reconciliation</p>
+        <h1>Finished stock count</h1>
+        <p class="lede">
+          Compare physically counted units with the external expected count. Search by SKU, barcode,
+          description, style, or size to audit any line.
+        </p>
+      </div>
+      <div class="page-actions">
+        <div class="file-meta">
+          <span class="file-meta-label">Source file</span>
+          <span class="file-meta-name" title="FinishedStockCountItemSummary (4).csv">FinishedStockCountItemSummary (4).csv</span>
+        </div>
+        <button class="button button-primary" id="exportTop" type="button" disabled>
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <path d="M12 3v12m0 0 4-4m-4 4-4-4M4 19h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          Export view
+        </button>
+      </div>
+    </section>
+
+    <section class="kpi-grid" aria-label="Count summary">
+      <article class="kpi">
+        <div class="kpi-head">
+          <span class="kpi-label">SKUs in view</span>
+          <span class="kpi-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 6h16M4 12h16M4 18h10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>
+          </span>
+        </div>
+        <div class="kpi-value" id="kpiSkus">—</div>
+        <div class="kpi-foot" id="kpiSkusFoot">Loading…</div>
+      </article>
+
+      <article class="kpi">
+        <div class="kpi-head">
+          <span class="kpi-label">Counted units</span>
+          <span class="kpi-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16"><path d="m5 12 4 4L19 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          </span>
+        </div>
+        <div class="kpi-value" id="kpiCounted">—</div>
+        <div class="kpi-foot" id="kpiCountedFoot">Loading…</div>
+      </article>
+
+      <article class="kpi">
+        <div class="kpi-head">
+          <span class="kpi-label">External expected</span>
+          <span class="kpi-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 19V9m5 10V5m5 14v-7m5 7V3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>
+          </span>
+        </div>
+        <div class="kpi-value" id="kpiExpected">—</div>
+        <div class="kpi-foot" id="kpiExpectedFoot">Loading…</div>
+      </article>
+
+      <article class="kpi kpi-variance" id="varianceKpi">
+        <div class="kpi-head">
+          <span class="kpi-label">Net variance</span>
+          <span class="kpi-chip" id="varianceDirection">—</span>
+        </div>
+        <div class="kpi-value" id="kpiVariance">—</div>
+        <div class="kpi-foot" id="kpiVarianceFoot">Counted − external expected</div>
+      </article>
+    </section>
+
+    <section class="analysis-grid" aria-label="Count analysis">
+      <article class="panel compare-panel">
+        <header class="panel-head">
+          <div>
+            <h2>Counted vs external expected</h2>
+            <p class="panel-sub">Unit totals across the current view</p>
+          </div>
+          <span class="scope-pill" id="compareScope">All SKUs</span>
+        </header>
+
+        <div class="bars">
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="bar-name"><span class="legend-dot dot-counted"></span>Counted</span>
+              <strong id="countedValue">—</strong>
+            </div>
+            <div class="bar-track" role="img" aria-label="Counted units">
+              <div class="bar-fill fill-counted" id="countedBar"></div>
+            </div>
+            <span class="bar-pct" id="countedPct">—</span>
+          </div>
+
+          <div class="bar-row">
+            <div class="bar-meta">
+              <span class="bar-name"><span class="legend-dot dot-expected"></span>External expected</span>
+              <strong id="expectedValue">—</strong>
+            </div>
+            <div class="bar-track" role="img" aria-label="External expected units">
+              <div class="bar-fill fill-expected" id="expectedBar"></div>
+            </div>
+            <span class="bar-pct" id="expectedPct">—</span>
+          </div>
+        </div>
+
+        <footer class="compare-foot">
+          <div class="variance-line">
+            <span class="variance-dot" id="varianceDot" aria-hidden="true"></span>
+            <span id="varianceSentence">Calculating variance…</span>
+          </div>
+          <span class="coverage-note" id="coverageNote"></span>
+        </footer>
+      </article>
+
+      <article class="panel mix-panel">
+        <header class="panel-head">
+          <div>
+            <h2>SKU reconciliation</h2>
+            <p class="panel-sub">How lines compare to expected</p>
+          </div>
+          <span class="match-badge" id="matchBadge">—</span>
+        </header>
+
+        <div class="match-rate">
+          <span class="match-number" id="matchRate">—</span>
+          <span class="match-caption">of SKUs match exactly</span>
+        </div>
+
+        <div class="mix-track" id="mixTrack" role="img" aria-label="Matched, under, and over SKU mix">
+          <span class="mix-seg seg-match" id="mixMatch"></span>
+          <span class="mix-seg seg-under" id="mixUnder"></span>
+          <span class="mix-seg seg-over" id="mixOver"></span>
+        </div>
+
+        <div class="mix-legend">
+          <button class="mix-item" type="button" data-status="match">
+            <span class="legend-dot dot-match"></span>
+            <span class="mix-label">Matched</span>
+            <strong id="mixMatchCount">—</strong>
+          </button>
+          <button class="mix-item" type="button" data-status="under">
+            <span class="legend-dot dot-under"></span>
+            <span class="mix-label">Under</span>
+            <strong id="mixUnderCount">—</strong>
+          </button>
+          <button class="mix-item" type="button" data-status="over">
+            <span class="legend-dot dot-over"></span>
+            <span class="mix-label">Over</span>
+            <strong id="mixOverCount">—</strong>
+          </button>
+        </div>
+      </article>
+    </section>
+
+    <section class="table-card" aria-labelledby="tableTitle">
+      <div class="table-card-head">
+        <div>
+          <h2 id="tableTitle">SKU detail</h2>
+          <p class="table-sub">Click any line to open its full reconciliation record.</p>
+        </div>
+        <div class="view-count" id="viewCount">—</div>
+      </div>
+
+      <div class="toolbar">
+        <div class="search-field">
+          <svg class="search-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8" />
+            <path d="m16 16 4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+          </svg>
+          <label class="sr-only" for="search">Search SKU or item text</label>
+          <input id="search" type="search" autocomplete="off" spellcheck="false"
+                 placeholder="Search SKU, barcode, item text…" />
+          <kbd id="searchHint">/</kbd>
+          <button class="search-clear" id="searchClear" type="button" aria-label="Clear search" hidden>
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+              <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+            </svg>
+          </button>
+        </div>
+
+        <div class="filter-fields">
+          <label class="select-field">
+            <span>Brand</span>
+            <select id="brandFilter">
+              <option value="all">All brands</option>
+            </select>
+          </label>
+          <label class="select-field">
+            <span>Segment</span>
+            <select id="categoryFilter">
+              <option value="all">All segments</option>
+            </select>
+          </label>
+          <button class="button button-quiet" id="resetFilters" type="button" hidden>
+            Reset
+          </button>
+        </div>
+      </div>
+
+      <div class="filter-summary">
+        <div class="status-filter" role="group" aria-label="Filter by count status">
+          <button type="button" class="status-pill is-active" data-status="all">All <span id="countAll">—</span></button>
+          <button type="button" class="status-pill" data-status="match">Matched <span id="countMatch">—</span></button>
+          <button type="button" class="status-pill" data-status="under">Under <span id="countUnder">—</span></button>
+          <button type="button" class="status-pill" data-status="over">Over <span id="countOver">—</span></button>
+        </div>
+        <div class="result-meta">
+          <span id="resultSummary">Loading count data…</span>
+          <span class="sort-note" id="sortNote">Largest gaps first</span>
+        </div>
+      </div>
+
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th scope="col" class="th-sku"><button type="button" data-sort="sku">SKU <span class="sort-arrow" aria-hidden="true"></span></button></th>
+              <th scope="col" class="th-item"><button type="button" data-sort="description">Item <span class="sort-arrow" aria-hidden="true"></span></button></th>
+              <th scope="col" class="th-num"><button type="button" data-sort="counted">Counted <span class="sort-arrow" aria-hidden="true"></span></button></th>
+              <th scope="col" class="th-num"><button type="button" data-sort="expected">External expected <span class="sort-arrow" aria-hidden="true"></span></button></th>
+              <th scope="col" class="th-num"><button type="button" data-sort="variance">Variance <span class="sort-arrow" aria-hidden="true"></span></button></th>
+              <th scope="col" class="th-status">Status</th>
+            </tr>
+          </thead>
+          <tbody id="tableBody">
+            <tr class="loading-row">
+              <td colspan="6">
+                <span class="loading-spinner" aria-hidden="true"></span>
+                Loading 7,770 count records…
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="empty-state" id="emptyState" hidden>
+        <span class="empty-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="24" height="24"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.6" /><path d="m16 16 4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /></svg>
+        </span>
+        <h3 id="emptyTitle">No matching SKUs</h3>
+        <p id="emptyCopy">Try a different SKU, description, or filter combination.</p>
+        <button class="button button-secondary" id="emptyReset" type="button">Clear all filters</button>
+      </div>
+
+      <div class="pagination" id="pagination">
+        <div class="page-size">
+          <label for="pageSize">Rows</label>
+          <select id="pageSize">
+            <option value="25" selected>25</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+          </select>
+        </div>
+        <div class="page-controls">
+          <button class="page-button" id="prevPage" type="button" aria-label="Previous page">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          </button>
+          <span class="page-label" id="pageLabel">Page 1 of 1</span>
+          <button class="page-button" id="nextPage" type="button" aria-label="Next page">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="m9 5 7 7-7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <footer class="page-footer">
+      <span>Source: FinishedStockCountItemSummary (4).csv</span>
+      <span class="footer-sep" aria-hidden="true">·</span>
+      <span>Variance = counted − external expected. Negative expected values are preserved as provided.</span>
+    </footer>
+  </main>
+
+  <div class="drawer-backdrop" id="drawerBackdrop" hidden></div>
+  <aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle" aria-hidden="true">
+    <div class="drawer-head">
+      <div>
+        <p class="drawer-eyebrow">SKU record</p>
+        <h2 id="drawerTitle">—</h2>
+      </div>
+      <button class="icon-button drawer-close" id="drawerClose" type="button" aria-label="Close details">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>
+      </button>
+    </div>
+    <div class="drawer-body" id="drawerBody"></div>
+  </aside>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="assets/app.js"></script>
+</body>
+</html>
