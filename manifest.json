@@ -1,0 +1,52 @@
+{
+  "id": "./",
+  "name": "Count Audit — Finished Stock Count",
+  "short_name": "Count Audit",
+  "description": "Search and reconcile counted stock against external expected units.",
+  "lang": "en",
+  "dir": "ltr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#f3f5f0",
+  "theme_color": "#125336",
+  "categories": ["business", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "assets/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Search SKUs",
+      "short_name": "Search",
+      "description": "Jump straight to SKU search",
+      "url": "./?view=search",
+      "icons": [{ "src": "assets/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Largest shortfalls",
+      "short_name": "Shortfalls",
+      "description": "Open the SKU list sorted by largest shortfall",
+      "url": "./?view=shortfalls",
+      "icons": [{ "src": "assets/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ]
+}

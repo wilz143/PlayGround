@@ -1,7 +1,16 @@
 (function () {
   "use strict";
 
+  const ANDROID_APP = typeof window.AndroidBridge !== "undefined";
+  if (ANDROID_APP) document.documentElement.classList.add("android-app");
+
   const DATA_URL = "./data/finished-stock-count.csv";
+  const DEFAULT_SOURCE_NAME = "FinishedStockCountItemSummary (4).csv";
+  const FILE_DB_NAME = "count-audit-data";
+  const FILE_STORE_NAME = "files";
+  const FILE_RECORD_KEY = "active-csv";
+  const FILE_FALLBACK_KEY = "count-audit-active-csv";
+  const MAX_CSV_BYTES = 20 * 1024 * 1024;
   const numberFormat = new Intl.NumberFormat("en-US");
   const collator = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
 
@@ -17,12 +26,25 @@
     sortDir: "asc",
     page: 1,
     pageSize: 25,
-    selectedSku: null
+    articleLimit: 24,
+    selectedSku: null,
+    sourceName: DEFAULT_SOURCE_NAME,
+    sourceStored: false
   };
 
   const els = {};
   let toastTimer = null;
   let lastFocused = null;
+  let deferredInstallPrompt = null;
+  let mobileScrollFrame = null;
+
+  const MOBILE_QUERY = "(max-width: 760px)";
+  const ARTICLE_PAGE_STEP = 24;
+  const SIZE_ORDER = new Map([
+    ["XXS", 10], ["2XS", 11], ["XS", 20], ["S", 30], ["M", 40], ["L", 50],
+    ["XL", 60], ["XXL", 70], ["2XL", 70], ["3XL", 80], ["4XL", 90],
+    ["5XL", 100], ["6XL", 110], ["O/S", 200], ["OS", 200], ["ONE SIZE", 200]
+  ]);
 
   function byId(id) {
     return document.getElementById(id);
@@ -30,7 +52,7 @@
 
   function cacheElements() {
     [
-      "sourceDot", "sourceLabel", "themeToggle", "exportTop",
+      "sourceDot", "sourceLabel", "themeToggle", "exportTop", "installApp",
       "kpiSkus", "kpiSkusFoot", "kpiCounted", "kpiCountedFoot",
       "kpiExpected", "kpiExpectedFoot", "kpiVariance", "kpiVarianceFoot",
       "varianceKpi", "varianceDirection", "compareScope",
@@ -41,20 +63,27 @@
       "mixMatch", "mixUnder", "mixOver",
       "mixMatchCount", "mixUnderCount", "mixOverCount",
       "viewCount", "search", "searchHint", "searchClear", "brandFilter",
-      "categoryFilter", "resetFilters", "countAll", "countMatch",
+      "categoryFilter", "sortMobile", "resetFilters", "countAll", "countMatch",
       "countUnder", "countOver", "resultSummary", "sortNote",
       "tableBody", "emptyState", "emptyTitle", "emptyCopy", "emptyReset",
       "pagination", "pageLabel", "prevPage", "nextPage", "pageSize",
       "drawer", "drawerBackdrop", "drawerTitle", "drawerBody", "drawerClose",
-      "toast", "tableTitle"
+      "toast", "tableTitle", "articleResults", "csvFile", "uploadCsv",
+      "sourceFileName", "sourceFileLabel", "footerSource"
     ].forEach((id) => {
       els[id] = byId(id);
     });
     els.searchField = els.search.closest(".search-field");
     els.tableScroll = document.querySelector(".table-scroll");
+    els.tableSub = document.querySelector(".table-sub");
     els.statusButtons = Array.from(document.querySelectorAll(".status-pill"));
     els.mixButtons = Array.from(document.querySelectorAll(".mix-item"));
     els.sortButtons = Array.from(document.querySelectorAll("th button[data-sort]"));
+    els.mobileTabs = Array.from(document.querySelectorAll(".mobile-tab"));
+  }
+
+  function isMobile() {
+    return window.matchMedia(MOBILE_QUERY).matches;
   }
 
   function escapeHtml(value) {
@@ -157,9 +186,16 @@
     if (!csvRecords.length) return [];
     const headers = csvRecords[0].map((header) => header.replace(/^\uFEFF/, "").trim());
     const column = {};
+    const lookup = {};
     headers.forEach((header, index) => {
       column[header] = index;
+      lookup[header.toLowerCase()] = index;
     });
+
+    const readOptional = (record, name) => {
+      const index = lookup[name.toLowerCase()];
+      return index === undefined ? "" : String(record[index] || "").trim();
+    };
 
     const required = ["Sku", "Description", "Brand", "Counted", "External Expected"];
     if (required.some((name) => column[name] === undefined)) {
@@ -192,6 +228,9 @@
         size: size,
         category: category,
         segment: segment,
+        orp: readOptional(record, "ORP"),
+        crp: readOptional(record, "CRP"),
+        bin: readOptional(record, "Bin"),
         counted: counted,
         expected: expected,
         variance: variance,
@@ -225,7 +264,7 @@
     return state.rows.filter((row) => {
       if (state.brand !== "all" && row.brand !== state.brand) return false;
       if (state.category !== "all" && row.segment !== state.category) return false;
-      if (tokens.length && !matchesQuery(row, tokens)) return false;
+      if (!settings.ignoreQuery && tokens.length && !matchesQuery(row, tokens)) return false;
       if (!settings.ignoreStatus && state.status !== "all" && row.status !== state.status) return false;
       return true;
     });
@@ -346,7 +385,7 @@
 
     els.compareScope.textContent = summary.skus === state.rows.length
       ? "All SKUs"
-      : formatNumber(summary.skus) + " SKUs";
+      : formatNumber(summary.skus) + (summary.skus === 1 ? " SKU" : " SKUs");
   }
 
   function updateKpis(summary) {
@@ -430,6 +469,20 @@
       }
     });
     els.sortNote.textContent = sortLabel();
+    syncMobileSort();
+  }
+
+  function syncMobileSort() {
+    if (!els.sortMobile) return;
+    const value = state.sortKey + ":" + state.sortDir;
+    let option = Array.from(els.sortMobile.options).find((item) => item.value === value);
+    if (!option) {
+      option = document.createElement("option");
+      option.value = value;
+      option.textContent = sortLabel();
+      els.sortMobile.appendChild(option);
+    }
+    els.sortMobile.value = value;
   }
 
   function rowMarkup(row, maxGap) {
@@ -462,7 +515,199 @@
     );
   }
 
+  function sizeRank(size) {
+    const normalized = String(size || "").trim().toUpperCase();
+    if (!normalized) return 999;
+    if (SIZE_ORDER.has(normalized)) return SIZE_ORDER.get(normalized);
+    const numeric = Number.parseFloat(normalized);
+    if (Number.isFinite(numeric)) return 150 + numeric;
+    return 500;
+  }
+
+  function compareSizes(a, b) {
+    const rank = sizeRank(a.size) - sizeRank(b.size);
+    if (rank) return rank;
+    return collator.compare(a.size || "", b.size || "");
+  }
+
+  function buildArticleGroups(rows, matchingRows) {
+    const query = state.query.trim().toLowerCase();
+    const groups = new Map();
+    const orderByCode = new Map();
+    matchingRows.forEach((row) => {
+      const code = row.style || row.sku;
+      if (!orderByCode.has(code)) orderByCode.set(code, orderByCode.size);
+    });
+
+    rows.forEach((row) => {
+      const code = row.style || row.sku;
+      if (!orderByCode.has(code)) return;
+      let group = groups.get(code);
+      if (!group) {
+        group = {
+          code: code,
+          description: "",
+          orp: "",
+          crp: "",
+          bin: "",
+          rows: [],
+          counted: 0,
+          expected: 0,
+          variance: 0,
+          order: orderByCode.get(code),
+          exact: false
+        };
+        groups.set(code, group);
+      }
+
+      group.rows.push(row);
+      group.counted += row.counted;
+      group.expected += row.expected;
+      group.variance += row.variance;
+      if (!group.description && row.description) group.description = row.description;
+      if (!group.orp && row.orp) group.orp = row.orp;
+      if (!group.crp && row.crp) group.crp = row.crp;
+      if (!group.bin && row.bin) group.bin = row.bin;
+      if (query && (row.sku.toLowerCase() === query || row.barcode.toLowerCase() === query)) {
+        group.exact = true;
+      }
+    });
+
+    return Array.from(groups.values())
+      .map((group) => {
+        group.rows.sort(compareSizes);
+        group.status = group.variance > 0 ? "over" : group.variance < 0 ? "under" : "match";
+        return group;
+      })
+      .sort((a, b) => Number(b.exact) - Number(a.exact) || a.order - b.order);
+  }
+
+  function articleField(label, value, className) {
+    return "<div><dt>" + escapeHtml(label) + "</dt><dd" +
+      (className ? " class=\"" + className + "\"" : "") + ">" + value + "</dd></div>";
+  }
+
+  function sizeTilesMarkup(rows, metric, label) {
+    const query = state.query.trim().toLowerCase();
+    return rows.map((row) => {
+      const size = row.size || "O/S";
+      const hit = query && (row.sku.toLowerCase() === query || row.barcode.toLowerCase() === query);
+      const classes = "size-tile" +
+        (row[metric] === 0 ? " is-zero" : "") +
+        (hit ? " is-hit" : "");
+      return "<button class=\"" + classes + "\" type=\"button\" data-sku=\"" + escapeHtml(row.sku) + "\" " +
+        "aria-label=\"Open SKU " + escapeHtml(row.sku) + ", size " + escapeHtml(size) + ", " +
+        formatNumber(row[metric]) + " " + label + "\">" +
+        "<span class=\"size-tile-name\">" + escapeHtml(size) + "</span>" +
+        "<strong class=\"size-tile-count\">" + formatNumber(row[metric]) + "</strong>" +
+      "</button>";
+    }).join("");
+  }
+
+  function articleCardMarkup(group) {
+    const fields = [
+      articleField("Item Code", highlight(group.code)),
+      articleField("Item Description", highlight(group.description || "Untitled item"))
+    ];
+    if (group.orp) fields.push(articleField("ORP", escapeHtml(group.orp)));
+    if (group.crp) fields.push(articleField("CRP", escapeHtml(group.crp)));
+    if (group.bin) fields.push(articleField("Bin", escapeHtml(group.bin)));
+    fields.push(articleField("Counted", formatNumber(group.counted)));
+    fields.push(articleField("External expected", formatNumber(group.expected)));
+
+    return (
+      "<article class=\"article-card\" aria-label=\"Article " + escapeHtml(group.code) + ": " +
+        escapeHtml(group.description || "Untitled item") + "\">" +
+        "<div class=\"stockroom-grids\">" +
+          "<section class=\"stockroom-block\">" +
+            "<div class=\"article-size-head\">" +
+              "<div class=\"stockroom-title\">" +
+                "<span class=\"stockroom-kicker\">Stockroom 1</span>" +
+                "<h3>Counted</h3>" +
+              "</div>" +
+              "<span class=\"stockroom-total\">" + formatNumber(group.counted) + " units</span>" +
+            "</div>" +
+            "<div class=\"article-size-grid\">" + sizeTilesMarkup(group.rows, "counted", "counted") + "</div>" +
+          "</section>" +
+          "<section class=\"stockroom-block is-expected\">" +
+            "<div class=\"article-size-head\">" +
+              "<div class=\"stockroom-title\">" +
+                "<span class=\"stockroom-kicker\">Stockroom 2</span>" +
+                "<h3>External expected</h3>" +
+              "</div>" +
+              "<span class=\"stockroom-total\">" + formatNumber(group.expected) + " units</span>" +
+            "</div>" +
+            "<div class=\"article-size-grid\">" + sizeTilesMarkup(group.rows, "expected", "expected") + "</div>" +
+          "</section>" +
+        "</div>" +
+        "<dl class=\"article-fields\">" + fields.join("") + "</dl>" +
+        "<div class=\"article-foot\">" +
+          "<span>Tap a size to open its SKU record</span>" +
+          "<span>2 stockrooms</span>" +
+        "</div>" +
+      "</article>"
+    );
+  }
+
+  function articleScopeRows() {
+    const matchingCodes = new Set(state.view.map((row) => row.style || row.sku));
+    return filterRows({ ignoreQuery: true })
+      .filter((row) => matchingCodes.has(row.style || row.sku));
+  }
+
+  function renderArticleResults() {
+    const articleRows = articleScopeRows();
+    const groups = buildArticleGroups(articleRows, state.view);
+
+    if (!groups.length) {
+      els.articleResults.hidden = true;
+      els.articleResults.innerHTML = "";
+      els.emptyState.hidden = false;
+      els.emptyTitle.textContent = "No matching articles";
+      els.emptyCopy.textContent = "Try a different SKU, barcode, description, or article code.";
+      els.emptyReset.textContent = "Clear all filters";
+      els.emptyReset.onclick = resetAllFilters;
+      els.resultSummary.textContent = "No articles match the current filters";
+      els.viewCount.textContent = "0 articles";
+      return;
+    }
+
+    const visible = groups.slice(0, state.articleLimit);
+    const remaining = groups.length - visible.length;
+    const articleLabel = groups.length === 1 ? "1 article" : formatNumber(groups.length) + " articles";
+    const articleSkus = groups.reduce((total, group) => total + group.rows.length, 0);
+    const skuLabel = articleSkus === 1 ? "1 SKU" : formatNumber(articleSkus) + " SKUs";
+
+    els.emptyState.hidden = true;
+    els.articleResults.innerHTML = visible.map(articleCardMarkup).join("") +
+      (remaining > 0
+        ? "<button class=\"article-more\" id=\"showMoreArticles\" type=\"button\">Show " +
+          formatNumber(Math.min(ARTICLE_PAGE_STEP, remaining)) + " more articles</button>"
+        : "");
+    els.articleResults.hidden = false;
+    els.viewCount.textContent = articleLabel;
+    els.resultSummary.textContent = remaining > 0
+      ? "Showing " + formatNumber(visible.length) + " of " + formatNumber(groups.length) + " articles"
+      : articleLabel + " \u00b7 " + skuLabel;
+  }
+
   function renderTable() {
+    const articleMode = isMobile() && Boolean(state.query.trim());
+
+    if (articleMode) {
+      els.tableTitle.textContent = "Item search";
+      els.tableSub.textContent = "Grouped by article. Tap a size to open its SKU record.";
+      els.tableScroll.hidden = true;
+      els.pagination.hidden = true;
+      renderArticleResults();
+      return;
+    }
+
+    els.articleResults.hidden = true;
+    els.articleResults.innerHTML = "";
+    els.tableTitle.textContent = "SKU detail";
+    els.tableSub.textContent = "Click any line to open its full reconciliation record.";
+
     const total = state.view.length;
     const totalPages = Math.max(1, Math.ceil(total / state.pageSize));
     state.page = Math.min(Math.max(1, state.page), totalPages);
@@ -497,19 +742,32 @@
   }
 
   function render() {
+    const articleMode = isMobile() && Boolean(state.query.trim());
+
     state.base = filterRows({ ignoreStatus: true });
     state.view = sortRows(filterRows());
+
+    if (articleMode) {
+      const baseCodes = new Set(state.base.map((row) => row.style || row.sku));
+      state.base = filterRows({ ignoreStatus: true, ignoreQuery: true })
+        .filter((row) => baseCodes.has(row.style || row.sku));
+    }
+
     updateStatusCounts();
     updateFilterChrome();
     updateSortIndicators();
 
-    const summary = summarize(state.view);
+    const rowsInScope = articleMode ? articleScopeRows() : state.view;
+    const summary = summarize(rowsInScope);
     updateKpis(summary);
     updateAnalysis(summary);
     renderTable();
   }
 
   function populateFilters() {
+    els.brandFilter.length = 1;
+    els.categoryFilter.length = 1;
+
     const brands = Array.from(new Set(state.rows.map((row) => row.brand).filter(Boolean)))
       .sort((a, b) => collator.compare(a, b));
     const categories = Array.from(new Set(state.rows.map((row) => row.segment).filter(Boolean)))
@@ -530,12 +788,71 @@
     });
   }
 
+  function setMobileTab(name) {
+    els.mobileTabs.forEach((tab) => {
+      const active = tab.dataset.mobileAction === name;
+      tab.classList.toggle("is-active", active);
+      if (active) tab.setAttribute("aria-current", "page");
+      else tab.removeAttribute("aria-current");
+    });
+  }
+
+  function scrollToTable() {
+    const table = document.querySelector(".table-card");
+    if (!table) return;
+    const topbar = document.querySelector(".topbar");
+    const offset = (topbar ? topbar.getBoundingClientRect().height : 68) + 10;
+    const top = table.getBoundingClientRect().top + window.scrollY - offset;
+    window.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+  }
+
+  function handleMobileAction(action) {
+    if (action === "overview") {
+      setMobileTab("overview");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+    if (action === "skus") {
+      setMobileTab("skus");
+      scrollToTable();
+      return;
+    }
+    if (action === "search") {
+      setMobileTab("search");
+      scrollToTable();
+      window.setTimeout(() => {
+        els.search.focus();
+        els.search.select();
+      }, 360);
+      return;
+    }
+    if (action === "export") {
+      exportView();
+    }
+  }
+
+  function updateMobileTabOnScroll() {
+    if (!isMobile()) return;
+    if (document.activeElement === els.search || state.query.trim()) {
+      setMobileTab("search");
+      return;
+    }
+    const table = document.querySelector(".table-card");
+    if (!table) return;
+    if (window.scrollY < 220) {
+      setMobileTab("overview");
+    } else if (table.getBoundingClientRect().top < window.innerHeight * 0.55) {
+      setMobileTab("skus");
+    }
+  }
+
   function resetAllFilters() {
     state.query = "";
     state.status = "all";
     state.brand = "all";
     state.category = "all";
     state.page = 1;
+    state.articleLimit = ARTICLE_PAGE_STEP;
     els.search.value = "";
     render();
     els.search.focus();
@@ -696,17 +1013,180 @@
     document.body.removeChild(textarea);
   }
 
-  function showToast(message) {
+  function showToast(message, duration) {
     els.toast.textContent = message;
     els.toast.classList.add("is-visible");
     window.clearTimeout(toastTimer);
     toastTimer = window.setTimeout(() => {
       els.toast.classList.remove("is-visible");
-    }, 2200);
+    }, duration || 2200);
+  }
+
+  function openFileDatabase() {
+    return new Promise((resolve, reject) => {
+      if (!("indexedDB" in window)) {
+        reject(new Error("IndexedDB is unavailable"));
+        return;
+      }
+      const request = window.indexedDB.open(FILE_DB_NAME, 1);
+      request.onupgradeneeded = () => {
+        const database = request.result;
+        if (!database.objectStoreNames.contains(FILE_STORE_NAME)) {
+          database.createObjectStore(FILE_STORE_NAME);
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error("Could not open file storage"));
+    });
+  }
+
+  async function readStoredCsv() {
+    try {
+      const database = await openFileDatabase();
+      const record = await new Promise((resolve, reject) => {
+        const transaction = database.transaction(FILE_STORE_NAME, "readonly");
+        const request = transaction.objectStore(FILE_STORE_NAME).get(FILE_RECORD_KEY);
+        request.onsuccess = () => resolve(request.result || null);
+        request.onerror = () => reject(request.error || new Error("Could not read stored file"));
+      });
+      database.close();
+      if (record && record.text && record.name) return record;
+    } catch (error) {}
+
+    try {
+      const raw = localStorage.getItem(FILE_FALLBACK_KEY);
+      if (raw) {
+        const record = JSON.parse(raw);
+        if (record && record.text && record.name) return record;
+      }
+    } catch (error) {}
+
+    return null;
+  }
+
+  async function writeStoredCsv(record) {
+    let stored = false;
+
+    try {
+      const database = await openFileDatabase();
+      await new Promise((resolve, reject) => {
+        const transaction = database.transaction(FILE_STORE_NAME, "readwrite");
+        transaction.objectStore(FILE_STORE_NAME).put(record, FILE_RECORD_KEY);
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error || new Error("Could not store file"));
+        transaction.onabort = () => reject(transaction.error || new Error("File storage was cancelled"));
+      });
+      database.close();
+      stored = true;
+    } catch (error) {}
+
+    try {
+      localStorage.setItem(FILE_FALLBACK_KEY, JSON.stringify(record));
+      stored = true;
+    } catch (error) {}
+
+    return stored;
+  }
+
+  function applySourceName(name, stored) {
+    const sourceName = name || DEFAULT_SOURCE_NAME;
+    state.sourceName = sourceName;
+    state.sourceStored = Boolean(stored);
+    els.sourceFileName.textContent = sourceName;
+    els.sourceFileName.title = sourceName;
+    els.sourceFileLabel.textContent = stored ? "Local count file" : "Source file";
+    els.footerSource.textContent = "Source: " + sourceName;
+  }
+
+  function resetAfterDataChange() {
+    if (els.drawer.classList.contains("is-open")) closeDrawer();
+    state.query = "";
+    state.status = "all";
+    state.brand = "all";
+    state.category = "all";
+    state.sortKey = "variance";
+    state.sortDir = "asc";
+    state.page = 1;
+    state.articleLimit = ARTICLE_PAGE_STEP;
+    state.selectedSku = null;
+    els.search.value = "";
+    populateFilters();
+    render();
+  }
+
+  async function handleCsvFile(file) {
+    if (!file) return;
+    els.csvFile.value = "";
+
+    if (file.size > MAX_CSV_BYTES) {
+      showToast("CSV is too large. Choose a file under 20 MB.", 4800);
+      return;
+    }
+    if (!/\.csv$/i.test(file.name)) {
+      showToast("Choose a CSV count file.", 3600);
+      return;
+    }
+
+    try {
+      const text = await file.text();
+      const rows = buildRows(parseCsv(text));
+      if (!rows.length) throw new Error("No SKU rows were found in the CSV.");
+      const countLabel = formatNumber(rows.length) + (rows.length === 1 ? " SKU" : " SKUs");
+
+      const confirmed = window.confirm(
+        'Replace "' + state.sourceName + '" with "' + file.name + '"?\n\n' +
+        countLabel + " will overwrite the active count file stored on this device."
+      );
+      if (!confirmed) return;
+
+      const stored = await writeStoredCsv({
+        name: file.name,
+        text: text,
+        savedAt: new Date().toISOString()
+      });
+
+      state.rows = rows;
+      applySourceName(file.name, stored);
+      resetAfterDataChange();
+      els.sourceDot.classList.remove("is-error");
+      els.sourceDot.classList.add("is-ready");
+      els.sourceLabel.textContent = formatNumber(rows.length) + (rows.length === 1 ? " SKU loaded" : " SKUs loaded");
+      els.exportTop.disabled = false;
+      document.body.dataset.ready = "true";
+      showToast(
+        stored
+          ? "Replaced count file \u00b7 " + countLabel
+          : "Loaded count file for this session",
+        stored ? 3200 : 4200
+      );
+    } catch (error) {
+      console.warn(error);
+      showToast("CSV not replaced: " + (error && error.message ? error.message : "invalid count file"), 5200);
+    }
+  }
+
+  async function loadInitialData() {
+    const stored = await readStoredCsv();
+    if (stored) {
+      try {
+        const rows = buildRows(parseCsv(stored.text));
+        if (rows.length) {
+          return { rows: rows, name: stored.name, stored: true };
+        }
+      } catch (error) {
+        console.warn("Stored count file could not be read", error);
+      }
+    }
+
+    const response = await fetch(DATA_URL, { cache: "no-cache" });
+    if (!response.ok) throw new Error("HTTP " + response.status + " loading " + DATA_URL);
+    const text = await response.text();
+    return { rows: buildRows(parseCsv(text)), name: DEFAULT_SOURCE_NAME, stored: false };
   }
 
   function exportView() {
-    if (!state.view.length) {
+    const rows = isMobile() && state.query.trim() ? articleScopeRows() : state.view;
+    if (!rows.length) {
       showToast("No rows to export");
       return;
     }
@@ -724,7 +1204,7 @@
     };
 
     const lines = [headers.join(",")];
-    state.view.forEach((row) => {
+    rows.forEach((row) => {
       lines.push([
         row.sku, row.barcode, row.brand, row.description, row.style, row.size,
         row.category, row.segment, row.counted, row.expected, row.variance,
@@ -733,16 +1213,22 @@
       ].map(escapeCell).join(","));
     });
 
+    const filename = "finished-stock-count-" + new Date().toISOString().slice(0, 10) + ".csv";
+    if (ANDROID_APP && typeof window.AndroidBridge.saveCsv === "function") {
+      window.AndroidBridge.saveCsv(filename, "\uFEFF" + lines.join("\r\n"));
+      return;
+    }
+
     const blob = new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "finished-stock-count-" + new Date().toISOString().slice(0, 10) + ".csv";
+    link.download = filename;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-    showToast("Exported " + formatNumber(state.view.length) + " SKUs");
+    showToast("Exported " + formatNumber(rows.length) + " SKUs");
   }
 
   function applyTheme(theme) {
@@ -752,15 +1238,21 @@
       delete document.documentElement.dataset.theme;
     }
     els.themeToggle.setAttribute("aria-label", theme === "dark" ? "Switch to light mode" : "Switch to dark mode");
+    const themeColor = document.querySelector('meta[name="theme-color"]');
+    if (themeColor) themeColor.setAttribute("content", theme === "dark" ? "#0e1511" : "#125336");
     try {
       localStorage.setItem("count-theme", theme);
     } catch (error) {}
+    if (ANDROID_APP && typeof window.AndroidBridge.setDarkMode === "function") {
+      window.AndroidBridge.setDarkMode(theme === "dark");
+    }
   }
 
   function bindEvents() {
     els.search.addEventListener("input", () => {
       state.query = els.search.value;
       state.page = 1;
+      state.articleLimit = ARTICLE_PAGE_STEP;
       render();
     });
 
@@ -770,6 +1262,7 @@
         els.search.value = "";
         state.query = "";
         state.page = 1;
+        state.articleLimit = ARTICLE_PAGE_STEP;
         render();
       }
     });
@@ -778,6 +1271,7 @@
       els.search.value = "";
       state.query = "";
       state.page = 1;
+      state.articleLimit = ARTICLE_PAGE_STEP;
       render();
       els.search.focus();
     });
@@ -790,6 +1284,14 @@
 
     els.categoryFilter.addEventListener("change", () => {
       state.category = els.categoryFilter.value;
+      state.page = 1;
+      render();
+    });
+
+    els.sortMobile.addEventListener("change", () => {
+      const parts = els.sortMobile.value.split(":");
+      state.sortKey = parts[0];
+      state.sortDir = parts[1] === "asc" ? "asc" : "desc";
       state.page = 1;
       render();
     });
@@ -853,6 +1355,18 @@
       if (row) openDrawer(row.dataset.sku);
     });
 
+    els.articleResults.addEventListener("click", (event) => {
+      const tile = event.target.closest(".size-tile");
+      if (tile) {
+        openDrawer(tile.dataset.sku);
+        return;
+      }
+      if (event.target.closest("#showMoreArticles")) {
+        state.articleLimit += ARTICLE_PAGE_STEP;
+        renderTable();
+      }
+    });
+
     els.tableBody.addEventListener("keydown", (event) => {
       const row = event.target.closest("tr.data-row");
       if (!row) return;
@@ -901,12 +1415,162 @@
       }
     });
 
+    els.mobileTabs.forEach((tab) => {
+      tab.addEventListener("click", () => handleMobileAction(tab.dataset.mobileAction));
+    });
+
+    els.search.addEventListener("focus", () => {
+      if (isMobile()) setMobileTab("search");
+    });
+
+    els.search.addEventListener("blur", () => {
+      if (!isMobile()) return;
+      window.setTimeout(() => {
+        if (document.activeElement !== els.search) updateMobileTabOnScroll();
+      }, 0);
+    });
+
+    window.addEventListener("scroll", () => {
+      if (mobileScrollFrame) return;
+      mobileScrollFrame = window.requestAnimationFrame(() => {
+        mobileScrollFrame = null;
+        updateMobileTabOnScroll();
+      });
+    }, { passive: true });
+
+    const mobileMedia = window.matchMedia(MOBILE_QUERY);
+    const handleModeChange = () => render();
+    if (mobileMedia.addEventListener) mobileMedia.addEventListener("change", handleModeChange);
+    else if (mobileMedia.addListener) mobileMedia.addListener(handleModeChange);
+
+    setupDrawerGesture();
+
     els.themeToggle.addEventListener("click", () => {
       const dark = document.documentElement.dataset.theme === "dark";
       applyTheme(dark ? "light" : "dark");
     });
 
     els.exportTop.addEventListener("click", exportView);
+
+    els.uploadCsv.addEventListener("click", () => els.csvFile.click());
+    els.csvFile.addEventListener("change", () => handleCsvFile(els.csvFile.files[0]));
+  }
+
+  function setupDrawerGesture() {
+    const handle = els.drawer.querySelector(".drawer-handle");
+    if (!handle) return;
+    let startY = 0;
+    let currentY = 0;
+    let dragging = false;
+
+    handle.addEventListener("pointerdown", (event) => {
+      if (!isMobile()) return;
+      dragging = true;
+      startY = event.clientY;
+      currentY = event.clientY;
+      els.drawer.style.transition = "none";
+      handle.setPointerCapture(event.pointerId);
+    });
+
+    handle.addEventListener("pointermove", (event) => {
+      if (!dragging) return;
+      currentY = event.clientY;
+      const distance = Math.max(0, currentY - startY);
+      els.drawer.style.transform = "translateY(" + distance + "px)";
+    });
+
+    const end = (event) => {
+      if (!dragging) return;
+      dragging = false;
+      els.drawer.style.transition = "";
+      els.drawer.style.transform = "";
+      if (event.type === "pointerup" && currentY - startY > 90) {
+        closeDrawer();
+      }
+    };
+
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+  }
+
+  function setupInstallPrompt() {
+    if (ANDROID_APP) {
+      els.installApp.hidden = true;
+      return;
+    }
+    const standalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+    const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    if ((isIOS && !standalone) || (deferredInstallPrompt && !standalone)) {
+      els.installApp.hidden = false;
+    }
+
+    window.addEventListener("beforeinstallprompt", (event) => {
+      event.preventDefault();
+      if (window.matchMedia("(display-mode: standalone)").matches) return;
+      deferredInstallPrompt = event;
+      els.installApp.hidden = false;
+    });
+
+    window.addEventListener("appinstalled", () => {
+      deferredInstallPrompt = null;
+      els.installApp.hidden = true;
+      showToast("Count Audit installed");
+    });
+
+    els.installApp.addEventListener("click", async () => {
+      if (deferredInstallPrompt) {
+        deferredInstallPrompt.prompt();
+        let choice = null;
+        try {
+          choice = await deferredInstallPrompt.userChoice;
+        } catch (error) {}
+        deferredInstallPrompt = null;
+        els.installApp.hidden = true;
+        if (choice && choice.outcome === "accepted") showToast("Count Audit installed");
+        return;
+      }
+      if (isIOS) {
+        showToast("Tap Share, then Add to Home Screen", 5200);
+      } else {
+        showToast("Open your browser menu and choose Install app", 4200);
+      }
+    });
+  }
+
+  async function registerServiceWorker() {
+    if (ANDROID_APP || !("serviceWorker" in navigator) || location.protocol === "file:") return;
+    try {
+      await navigator.serviceWorker.register("./sw.js", { scope: "./" });
+    } catch (error) {
+      console.warn("Service worker registration failed", error);
+    }
+  }
+
+  function handleLaunchShortcut() {
+    let view = null;
+    try {
+      const url = new URL(window.location.href);
+      view = url.searchParams.get("view");
+      if (view) {
+        url.searchParams.delete("view");
+        window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+      }
+    } catch (error) {}
+
+    if (!view) return;
+    if (view === "search") {
+      scrollToTable();
+      window.setTimeout(() => {
+        els.search.focus();
+        els.search.select();
+      }, 360);
+    } else if (view === "shortfalls") {
+      state.sortKey = "variance";
+      state.sortDir = "asc";
+      state.page = 1;
+      render();
+      scrollToTable();
+    }
   }
 
   function showLoadError(error) {
@@ -927,21 +1591,27 @@
   async function init() {
     cacheElements();
     bindEvents();
+    setupInstallPrompt();
+    if (ANDROID_APP && typeof window.AndroidBridge.setDarkMode === "function") {
+      window.AndroidBridge.setDarkMode(document.documentElement.dataset.theme === "dark");
+    }
     updateFilterChrome();
 
     try {
-      const response = await fetch(DATA_URL, { cache: "no-cache" });
-      if (!response.ok) throw new Error("HTTP " + response.status + " loading " + DATA_URL);
-      const text = await response.text();
-      state.rows = buildRows(parseCsv(text));
+      const loaded = await loadInitialData();
+      state.rows = loaded.rows;
       if (!state.rows.length) throw new Error("No SKU records found in count file.");
 
+      applySourceName(loaded.name, loaded.stored);
       populateFilters();
       els.sourceDot.classList.add("is-ready");
-      els.sourceLabel.textContent = formatNumber(state.rows.length) + " SKUs loaded";
+      els.sourceLabel.textContent = formatNumber(state.rows.length) +
+        (state.rows.length === 1 ? " SKU loaded" : " SKUs loaded");
       els.exportTop.disabled = false;
       document.body.dataset.ready = "true";
       render();
+      handleLaunchShortcut();
+      registerServiceWorker();
     } catch (error) {
       document.body.dataset.ready = "error";
       showLoadError(error);

@@ -2,23 +2,34 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Finished Stock Count · Count Audit</title>
   <meta name="description" content="Search and reconcile counted stock against external expected units." />
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23125336'/%3E%3Crect x='8' y='18' width='4' height='7' rx='1' fill='%23d8f0a8'/%3E%3Crect x='14' y='12' width='4' height='13' rx='1' fill='%23d8f0a8'/%3E%3Crect x='20' y='7' width='4' height='18' rx='1' fill='%23d8f0a8'/%3E%3C/svg%3E" />
+  <meta name="format-detection" content="telephone=no" />
+  <meta name="theme-color" id="themeColor" content="#125336" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Count Audit" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="assets/icon-192.png" />
   <link rel="stylesheet" href="assets/styles.css" />
   <script>
     (function () {
       try {
         var saved = localStorage.getItem("count-theme");
-        if (saved === "dark") document.documentElement.dataset.theme = "dark";
+        var dark = saved === "dark";
+        if (dark) document.documentElement.dataset.theme = "dark";
+        var themeColor = document.querySelector('meta[name="theme-color"]');
+        if (themeColor) themeColor.setAttribute("content", dark ? "#0e1511" : "#125336");
       } catch (error) {}
     })();
   </script>
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="./" aria-label="Count Audit home">
+    <a class="brand" href="./index.html" aria-label="Count Audit home">
       <span class="brand-mark" aria-hidden="true">
         <svg viewBox="0 0 32 32" width="30" height="30" role="img">
           <rect width="32" height="32" rx="8" fill="currentColor" />
@@ -37,6 +48,11 @@
         <span class="source-dot" id="sourceDot" aria-hidden="true"></span>
         <span id="sourceLabel">Loading count file</span>
       </span>
+      <button class="icon-button install-button" id="installApp" type="button" aria-label="Install app" title="Install app" hidden>
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path d="M12 3v10m0 0 3.5-3.5M12 13 8.5 9.5M5 17v2h14v-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
       <button class="icon-button" id="themeToggle" type="button" aria-label="Switch to dark mode" title="Toggle color theme">
         <svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
           <circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.8" />
@@ -61,9 +77,16 @@
       </div>
       <div class="page-actions">
         <div class="file-meta">
-          <span class="file-meta-label">Source file</span>
-          <span class="file-meta-name" title="FinishedStockCountItemSummary (4).csv">FinishedStockCountItemSummary (4).csv</span>
+          <span class="file-meta-label" id="sourceFileLabel">Source file</span>
+          <span class="file-meta-name" id="sourceFileName" title="FinishedStockCountItemSummary (4).csv">FinishedStockCountItemSummary (4).csv</span>
         </div>
+        <input id="csvFile" type="file" accept=".csv,text/csv" hidden />
+        <button class="button button-secondary" id="uploadCsv" type="button" aria-label="Upload and replace count CSV">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <path d="M12 16V4m0 0 4 4m-4-4L8 8M5 14v5h14v-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          Replace CSV
+        </button>
         <button class="button button-primary" id="exportTop" type="button" disabled>
           <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
             <path d="M12 3v12m0 0 4-4m-4 4-4-4M4 19h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
@@ -217,7 +240,8 @@
           </svg>
           <label class="sr-only" for="search">Search SKU or item text</label>
           <input id="search" type="search" autocomplete="off" spellcheck="false"
-                 placeholder="Search SKU, barcode, item text…" />
+                 inputmode="search" enterkeyhint="search" autocapitalize="off"
+                 placeholder="Search SKU, barcode, text…" />
           <kbd id="searchHint">/</kbd>
           <button class="search-clear" id="searchClear" type="button" aria-label="Clear search" hidden>
             <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
@@ -257,6 +281,23 @@
           <span class="sort-note" id="sortNote">Largest gaps first</span>
         </div>
       </div>
+
+      <div class="mobile-sort-row">
+        <label class="select-field mobile-sort-field">
+          <span>Sort by</span>
+          <select id="sortMobile">
+            <option value="variance:asc">Largest shortfalls</option>
+            <option value="variance:desc">Largest surpluses</option>
+            <option value="gap:desc">Largest gaps</option>
+            <option value="sku:asc">SKU A–Z</option>
+            <option value="description:asc">Item A–Z</option>
+            <option value="counted:desc">Counted high–low</option>
+            <option value="expected:desc">Expected high–low</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="article-results" id="articleResults" aria-label="Article search results" hidden></div>
 
       <div class="table-scroll">
         <table class="data-table">
@@ -312,14 +353,46 @@
     </section>
 
     <footer class="page-footer">
-      <span>Source: FinishedStockCountItemSummary (4).csv</span>
+      <span id="footerSource">Source: FinishedStockCountItemSummary (4).csv</span>
       <span class="footer-sep" aria-hidden="true">·</span>
       <span>Variance = counted − external expected. Negative expected values are preserved as provided.</span>
     </footer>
   </main>
 
+  <nav class="mobile-tabs" aria-label="App navigation">
+    <button class="mobile-tab is-active" type="button" data-mobile-action="overview" aria-current="page">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+        <rect x="4" y="4" width="6.5" height="6.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7" />
+        <rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7" />
+        <rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7" />
+        <rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7" />
+      </svg>
+      <span>Overview</span>
+    </button>
+    <button class="mobile-tab" type="button" data-mobile-action="skus">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+        <path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
+      </svg>
+      <span>SKUs</span>
+    </button>
+    <button class="mobile-tab" type="button" data-mobile-action="search">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+        <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8" />
+        <path d="m16 16 4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+      </svg>
+      <span>Search</span>
+    </button>
+    <button class="mobile-tab" type="button" data-mobile-action="export">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+        <path d="M12 4v10m0 0 3.5-3.5M12 14 8.5 10.5M5 17v2h14v-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+      <span>Export</span>
+    </button>
+  </nav>
+
   <div class="drawer-backdrop" id="drawerBackdrop" hidden></div>
   <aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle" aria-hidden="true">
+    <div class="drawer-handle" aria-hidden="true"></div>
     <div class="drawer-head">
       <div>
         <p class="drawer-eyebrow">SKU record</p>
